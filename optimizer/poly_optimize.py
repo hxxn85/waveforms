@@ -1,10 +1,7 @@
 import numpy as np
-import matplotlib.pyplot as plt
 
 from scipy import constants
-from scipy import signal
 from scipy.spatial import distance
-from scipy.linalg import norm, hadamard
 
 def db2pow(x):
     return 10**(x/20)
@@ -92,8 +89,10 @@ class Target:
 
 
 class Radar:
-    def __init__(self, x: Waveform, pt, fc, location, radiator: Radiator, collector: Collector):
-        self.x = x                  # waveform object
+    def __init__(self, waveforms, idx, pt, fc, location, radiator: Radiator, collector: Collector):
+        self.waveforms = waveforms  # waveforms for matched filter
+        self.idx = idx              # index
+        self.x = waveforms[idx]     # tx waveform
         self.pt = pt                # peak power
         self.fc = fc                # carrier frequency
         self.location = location    # location of the radar
@@ -118,63 +117,95 @@ class Radar:
         n = len(x)
         out = []
         for i in range(n):
-            out.append(np.abs(np.dot(b[i:len(a)+i], a)))
+            out.append(np.abs(np.dot(b[i:len(a)+i], np.conj(a))))
 
         return out
 
+    def nfilter(self, x):
+        a = self.x.get_waveform()
+        b = x.copy()
+        pa = np.sum(np.abs(a)**2)   # power of the transmitted signal
+        b = np.concatenate([x.copy(), 1.20116463e-11 * np.random.rand(len(a) - 1)])
+        n = len(x)
+        out = []
+        for i in range(n):
+            tmp = np.asarray(b[i:len(a) + i])
+            pb = np.sum(np.abs(tmp) ** 2) # received signal power
+            # for j in range(len(self.waveforms)):
+            #     if j == self.idx: continue
+            #
+            #     w = self.waveforms[j]
+            #     matched_out = np.array(np.abs(np.dot(tmp, np.conj(w.x))))
+            #     tmp = tmp - (matched_out * w.x)
+
+            matched_out = np.array([np.abs(np.dot(tmp, np.conj(w.x))) for w in self.waveforms])
+            tmp = tmp - np.sum([k * x.x for k, x in zip(matched_out, self.waveforms)], axis=0)
+
+            out.append(np.abs(np.dot(tmp, np.conj(a))) / np.sqrt(pb * pa))
+
+        return np.asarray(out)
+
+
 #%%
-tp, prf, fc = 1e-6, 1/20e-6, 1e9
-fs = 256e6
-lamd = constants.c / fc
-rcs = 0.1
-gain = 20
-snr = 10.5298   # neyman-pearson white gaussian noise threshold for Pfa = 1e-6, 1 pulse and coherent radar
+# tp, prf, fc = 1e-6, 1/20e-6, 1e9
+# fs = 256e6
+# lamd = constants.c / fc
+#
+# rcs = 0.1
+# gain = 20
+# snr = 10.5298   # neyman-pearson white gaussian noise threshold for Pfa = 1e-6, 1 pulse and coherent radar
+#
+# maxrange = constants.c / 2 / prf
+# dbterm = db2pow(snr - 2*gain)
+# loss = constants.k * 290 * 1/tp
+# pt = (4*np.pi)**3 * maxrange**4 * dbterm * loss / lamd**2 / rcs * 10
+#
+# tgtloc = [[500,500,0], [1500,1500,0], [2500,1000,0]]
+# radloc = [[0,0,0], [1000,0,0], [2000,0,0], [3000,0,0]]
+#
+# wavs = [Waveform(x, tp, fs, prf) for x in np.repeat(hadamard(32)[[25,29,19,10]], 8, 1)]
+# radars = [Radar(x, pt, fc, loc, Radiator(gain, fc, [0, 3e9]), Collector(gain, fc, [0, 3e9])) \
+#           for x, loc in zip(wavs, radloc)]
+# tg = Target(rcs, tgtloc)
+# ch = Channel(fs)
+#
+# def process(tx: Radar, rx: Radar, ch: Channel, tg: Target):
+#     sig, state = tx.transmit(return_state=True)
+#     sig = ch.propagate(sig, tx.location, tg.location)
+#     sig = tg.reflect(sig)
+#     sig = ch.propagate(sig, tg.location, rx.location)
+#     sig = rx.receive(sig, state ^ 1)
+#     return sig
+#
+# tx = np.sum([process(r, radars[0], ch, tg) for r in radars], axis=0)
+#
+# t = np.linspace(0, 1/prf, len(tx), endpoint=False)
+# rangegates = constants.c * t / 2
+# plt.subplot(2,1,1)
+# plt.plot(rangegates, pow2db(tx))
+# plt.grid(alpha=.5, ls='--')
+# plt.xlabel('range gate(m)')
+# plt.ylabel('received power(dB)')
+# plt.title('received signal')
+#
+# tx = radars[0].filter(tx)
+# plt.subplot(2,1,2)
+# plt.plot(rangegates, pow2db(tx))
+# [plt.axvline(rangegates[k], ls='--', color='orange') for k in signal.find_peaks(tx, db2pow(-170), width=50)[0]]
+# [plt.axvline(norm(k), label='target', ls='--', color='k') for k in tgtloc]
+# plt.legend()
+# plt.grid(alpha=.5, ls='--')
+# plt.xlabel('range gate(m)')
+# plt.ylabel('received power(dB)')
+# plt.title('matched filter output')
+# plt.tight_layout()
+# plt.show()
 
-maxrange = constants.c / 2 / prf
-dbterm = db2pow(snr - 2*gain)
-loss = constants.k * 290 * 1/tp
-pt = (4*np.pi)**3 * maxrange**4 * dbterm * loss / lamd**2 / rcs * 10
+#%%
+# kk = radars[0].x.get_waveform()
+# rxx = signal.correlate(kk, kk)
+# plt.plot(np.abs(rxx))
+# plt.plot(radars[0].filter(kk))
+# plt.show()
 
-tgtloc = [[500,500,0], [1500,1500,0], [2500,1000,0]]
-radloc = [[0,0,0], [1000,0,0], [2000,0,0], [3000,0,0]]
 
-t = np.linspace(0, 1e-6, int(tp*fs), endpoint=False)
-# sig = signal.square(2*np.pi*tp*t, 1) * 0.5 + 0.5
-# x = Waveform(sig, tp, fs, prf)
-
-wavs = [Waveform(x, tp, fs, prf) for x in np.repeat(hadamard(32)[[25,29,19,10]], 8, 1)]
-radars = [Radar(x, pt, fc, loc, Radiator(gain, fc, [0, 3e9]), Collector(gain, fc, [0, 3e9])) for x, loc in zip(wavs, radloc)]
-tg = Target(rcs, tgtloc)
-ch = Channel(fs)
-
-def process(tx: Radar, rx: Radar, ch: Channel, tg: Target):
-    sig, state = tx.transmit(return_state=True)
-    sig = ch.propagate(sig, tx.location, tg.location)
-    sig = tg.reflect(sig)
-    sig = ch.propagate(sig, tg.location, rx.location)
-    sig = rx.receive(sig, state ^ 1)
-    return sig
-
-tx = np.sum([process(r, radars[0], ch, tg) for r in radars], axis=0)
-
-t = np.linspace(0, 1/prf, len(tx), endpoint=False)
-rangegates = constants.c * t / 2
-plt.subplot(2,1,1)
-plt.plot(rangegates, pow2db(tx))
-plt.grid(alpha=.5, ls='--')
-plt.xlabel('range gate(m)')
-plt.ylabel('received power(dB)')
-plt.title('received signal')
-
-tx = radars[0].filter(tx)
-plt.subplot(2,1,2)
-plt.plot(rangegates, pow2db(tx))
-[plt.axvline(rangegates[k], ls='--', color='orange') for k in signal.find_peaks(tx, db2pow(-170), width=50)[0]]
-[plt.axvline(norm(k), label='target', ls='--', color='k') for k in tgtloc]
-plt.legend()
-plt.grid(alpha=.5, ls='--')
-plt.xlabel('range gate(m)')
-plt.ylabel('received power(dB)')
-plt.title('matched filter output')
-plt.tight_layout()
-plt.show()
